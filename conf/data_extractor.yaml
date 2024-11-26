@@ -1,0 +1,6 @@
+#root_dir: /home/urajkumar3/gie/GIE/GIE-back-end/inputs
+root_dir: /home/mfayed8/GraphIngestionEngineFall2024/GIE-back-end/inputs
+input: ${root_dir}/line_graph_og_l2s.png
+output_prefix: ${root_dir}/tables/line_graph_og_l2s #extensions are appended to each generated file accordingly
+is_scatter: false
+is_line: true

@@ -1,0 +1,9 @@
+classes:
+  - BarGraph
+  - LineGraph
+  - PieChart
+  - ScatterGraph
+model_path: ./model1.keras
+input_dir: "test_images"
+output_dir: predictions/${model_path}
+
