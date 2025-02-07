@@ -1,0 +1,3 @@
+true_dir: /path/to/ground/truth
+pred_dir: /path/to/predictions
+scores_csv: /path/to/csv/file/to/save/scores/at.

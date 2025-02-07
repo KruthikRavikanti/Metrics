@@ -5,9 +5,79 @@ import hydra
 from omegaconf import DictConfig
 from scipy import stats
 import ipdb
+from tqdm import tqdm
+from typing import Iterable, List, Tuple, Dict
 
+from pathlib import Path
+import json
 import math
+import logging
 
+
+logger = logging.getLogger()
+
+def read_json_file(file):
+    with open(file) as f:
+        tmp = json.load(f)
+    return tmp
+
+def write_json_file(dictionary, file):
+    with open(file, 'w') as f:
+        json.dump(dictionary, f)
+
+
+
+def convert_dict_to_float_in_table(df):
+    """
+    Some tables contain dictionary in cells instead of float.
+    I wrote this function to reformat those tables into more suitable form for computing RMS.
+    """
+    table = {}
+    # create new column for first key, vvalue in the dictionary
+    col_name = list(df.iloc[0, 0].keys())[0]
+    table[col_name] = [dictionary[col_name] for dictionary in df.iloc[:, 0]]
+    # extract the value from second key and insert it as float
+    # in the cell instead of the dictionary
+    for col in df.columns:
+        table[col] = [list(dictionary.values())[-1] for dictionary in df[col]]
+
+    return pd.DataFrame.from_dict(table)
+
+def convert_tuple_to_float_in_table(df):
+    """
+    Some tables contain tuples or lists in cells instead of float.
+    I wrote this function to reformat those tables into more suitable form for computing RMS.
+    Note: the missing column name is assumed to be "index".
+    TODO: You may need a smarter solution.
+    """
+    table = {}
+    # create new column for first key, vvalue in the dictionary
+    col_name = "index" # df.iloc[0, 0][0]
+    table[col_name] = [_tuple[0] for _tuple in df.iloc[:, 0]]
+    # extract the value from second key and insert it as float
+    # in the cell instead of the tuple
+    for col in df.columns:
+        table[col] = [_tuple[-1] for _tuple in df[col]]
+
+    return pd.DataFrame.from_dict(table)
+
+
+def convert_list_to_float_in_table(*args, **kwargs):
+    """
+    alias to convert_tuple_to_float_in_table(df) since same handling algorithm.
+    """
+    return convert_tuple_to_float_in_table(*args, **kwargs)
+
+def correct_format(df):
+    """
+    Function to include the logic for correcting any issues in the generated tables.
+    """
+    if isinstance(df.iloc[0,0], dict):
+        df = convert_dict_to_float_in_table(df)
+    elif isinstance(df.iloc[0,0], list) or isinstance(df.iloc[0,0], tuple):
+        df = convert_tuple_to_float_in_table(df)
+
+    return df
 
 def normalized_ed(s1, s2, method='max', epsilon=1e-10):
     """
@@ -114,7 +184,14 @@ def compute_rms(
     for tuple_pred in pred_dict.items():
         for tuple_true in true_dict.items():
             norm_ed = normalized_ed(tuple_pred[0], tuple_true[0])
-            d_theta = min(1, abs(tuple_pred[1] - tuple_true[1])/abs(max(tuple_true[1], epsilon)))
+            # we found some tables to include tuples as cell values,
+            # e.g. [2007, 54]
+            if isinstance(tuple_pred[1], float) or isinstance(tuple_pred[1], int):
+                d_theta = min(1, abs(tuple_pred[1] - tuple_true[1])/abs(max(tuple_true[1], epsilon)))
+            elif isinstance(tuple_pred[1], Tuple) or isinstance(tuple_pred[1], List):
+                d_theta = min(1, abs(tuple_pred[1][1] - tuple_true[1])/abs(max(tuple_true[1], epsilon)))
+            elif isinstance(tuple_pred[1], Dict):
+                d_theta = min(1, abs(list(tuple_pred[1].values())[1] - tuple_true[1])/abs(max(tuple_true[1], epsilon)))
             d_tau_theta = (1 - norm_ed) * (1 - d_theta)
             numerator += binarized_similarity_matrix[tuple_pred[0]][tuple_true[0]] * d_tau_theta
 
@@ -132,8 +209,41 @@ def compute_rms(
             'rms_f1': rms_f1,
             }
 
-@hydra.main(config_path='.', config_name='rms', version_base='1.3.2')
+@hydra.main(config_path='conf', config_name='rms', version_base='1.3.2')
 def main(cfg: DictConfig):
-    pass
+    setattr(cfg, 'true_dir', Path(cfg.true_dir))
+    setattr(cfg, 'pred_dir', Path(cfg.pred_dir))
+    true_files = list(cfg.true_dir.rglob('*csv'))
+    pred_files = list(cfg.pred_dir.rglob('*json'))
+    scores = []
+    if len(true_files) != len(pred_files):
+        raise Exception("different lengthss of csv files list"
+                        f"true files: {len(true_files)}, prediction files: {len(pred_files)}")
+
+    true_files = sorted(true_files)
+    pred_files = sorted(pred_files)
+    # We assume that there are only two levels:
+    # e.g. chart_type/image_id.csv
+    for true_file, pred_file in tqdm(zip(true_files, pred_files), total=len(true_files)):
+        #TODO: read whatever kind of files there
+        df_true = pd.read_csv(true_file)
+        df_pred = pd.read_json(pred_file)
+        df_pred = correct_format(df_pred)
+        scores.append({
+            'pred_file': pred_file,
+            **compute_rms(df_pred, df_true)
+            })
+
+    df_scores = pd.DataFrame.from_dict(scores)
+    overall_scores = {score: round(df_scores[score].mean(), 4) for score in df_scores.columns if score not in ['pred_file']}
+    logger.info(f"overall scores are: \n{overall_scores}",
+                #[f"{score}: {round(df_scores[score].mean(), 4)}" for score in df_scores.columns if score not in ['pred_file']]
+                 )
+    logger.info(f"saving scores to {cfg.scores_csv}")
+    setattr(cfg, 'scores_csv', Path(cfg.scores_csv))
+    df_scores.to_csv(cfg.scores_csv)
+    overall_csv = cfg.scores_csv.parent / f"{cfg.scores_csv.stem}.overall.csv"
+    logger.info(f"saving overall scores to {overall_csv}")
+    pd.DataFrame.from_dict([overall_scores]).to_csv(overall_csv)
 if __name__ == '__main__':
     main()
