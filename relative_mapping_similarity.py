@@ -16,6 +16,10 @@ import logging
 
 logger = logging.getLogger()
 
+def read_file(file):
+    with open(file, 'r', encoding='utf-8') as f:
+        return f.readlines()
+
 def read_json_file(file):
     with open(file) as f:
         tmp = json.load(f)
@@ -25,7 +29,45 @@ def write_json_file(dictionary, file):
     with open(file, 'w') as f:
         json.dump(dictionary, f)
 
+def read_markdown_as_dataframe(file):
+    return pd.read_table(
+            file, sep='|', skipinitialspace=True, header=0,
+            ).dropna(axis=1).iloc[1:]
 
+def find_files_list(dir):
+    """
+    for the given directory,
+    find all predictions files with their corresponding types.
+    Note: It assumes that all files are of the same type,
+    e.g. all in json, or csv or markdown.
+
+    supported extensions are:
+    * json
+    * csv
+    * md
+    """
+    dir = Path(dir)
+    supported_types = ['json', 'md', 'csv']
+    files = {}
+    for supported_type in supported_types:
+        files[supported_type] = list(dir.rglob(f"*.{supported_type}"))
+    _type = [k for k, v in files.items() if v][0]
+    _files = [v for v in files.values() if v][0]
+    return _files, _type
+def read_table(file, _type):
+    """
+    given a file and its type,
+    read the file accordingly
+    """
+    if _type == 'csv':
+        df = pd.read_csv(file)
+    elif _type == 'json':
+        df = pd.read_json(file)
+    elif _type == 'md':
+        df = read_markdown_as_dataframe(file)
+    else:
+        raise Exception(f"unsupported file type {_type}")
+    return df
 
 def convert_dict_to_float_in_table(df):
     """
@@ -150,21 +192,6 @@ def compute_rms(
             zip(columns, row[2:])
             ))
 
-    # compute normalized edit distances
-    #norm_eds, d_thetas, d_tau_thetas = {}, {}, {}
-    #for k_pred, v_pred in pred_dict.items():
-    #    norm_eds[k_pred] = {
-    #            k_true: normalized_ed(k_pred, k_true)
-    #            for k_true in true_dict.keys()
-    #            }
-    #    d_thetas[k_pred] = {
-    #        k_true: abs(v_pred - v_true)/v_true
-    #        for k_true, v_true in true_dict.items()
-    #        }
-    #    d_tau_theta = {}
-    #    for k_true, ned, d_theta in zip(true_dict.keys(), norm_eds[k_pred].values(), d_thetas[k_pred].values()):
-    #        d_tau_theta[k_true] = ned * d_theta
-    #    d_tau_thetas[k_pred] = d_tau_theta.copy()
     ##  compute pairwise similarity matrix between keys
     similarity_matrix = {}
     binarized_similarity_matrix = {}
@@ -187,6 +214,9 @@ def compute_rms(
             # we found some tables to include tuples as cell values,
             # e.g. [2007, 54]
             if isinstance(tuple_pred[1], float) or isinstance(tuple_pred[1], int):
+                d_theta = min(1, abs(tuple_pred[1] - tuple_true[1])/abs(max(tuple_true[1], epsilon)))
+            elif isinstance(tuple_pred[1], str):
+                tuple_pred = (tuple_pred[0], float(tuple_pred[1].strip()))
                 d_theta = min(1, abs(tuple_pred[1] - tuple_true[1])/abs(max(tuple_true[1], epsilon)))
             elif isinstance(tuple_pred[1], Tuple) or isinstance(tuple_pred[1], List):
                 d_theta = min(1, abs(tuple_pred[1][1] - tuple_true[1])/abs(max(tuple_true[1], epsilon)))
@@ -213,32 +243,62 @@ def compute_rms(
 def main(cfg: DictConfig):
     setattr(cfg, 'true_dir', Path(cfg.true_dir))
     setattr(cfg, 'pred_dir', Path(cfg.pred_dir))
-    true_files = list(cfg.true_dir.rglob('*csv'))
-    pred_files = list(cfg.pred_dir.rglob('*json'))
+    true_files, true_files_type = find_files_list(cfg.true_dir)
+    pred_files, pred_files_type = find_files_list(cfg.pred_dir)
     scores = []
-    if len(true_files) != len(pred_files):
-        raise Exception("different lengthss of csv files list"
-                        f"true files: {len(true_files)}, prediction files: {len(pred_files)}")
-
     true_files = sorted(true_files)
     pred_files = sorted(pred_files)
+    if len(true_files) != len(pred_files):
+        if cfg.skip_non_existing_tables:
+            num_removed = len(true_files) - len(pred_files)
+            pred_stems = {f.stem for f in pred_files}
+            true_files = [f for f in true_files if f.stem in pred_stems]
+            print(f"Warning: ignoring {num_removed} tables because there is no corresponding predictions.")
+            print(f"computing score on {len(true_files)} tables")
+        else:
+            raise Exception("different lengthss of csv files list"
+                            f"true files: {len(true_files)}, prediction files: {len(pred_files)}")
+
     # We assume that there are only two levels:
     # e.g. chart_type/image_id.csv
+    fail_count = 0
     for true_file, pred_file in tqdm(zip(true_files, pred_files), total=len(true_files)):
-        #TODO: read whatever kind of files there
-        df_true = pd.read_csv(true_file)
-        df_pred = pd.read_json(pred_file)
-        df_pred = correct_format(df_pred)
-        scores.append({
-            'pred_file': pred_file,
-            **compute_rms(df_pred, df_true)
-            })
+        try:
+            df_true = read_table(true_file, true_files_type)
+            df_pred = read_table(pred_file, pred_files_type)
+        except:
+            fail_count += 1
+            continue
+        pred_content = "".join(read_file(pred_file))
+        if (
+                'python' in pred_content
+            or 'print' in pred_content
+            ):
+            fail_count += 1
+            continue
+        try: # if len(df_pred) > 0:
+            df_pred = correct_format(df_pred)
+            scores.append({
+                'pred_file': pred_file.parent / pred_file.stem,
+                **compute_rms(df_pred, df_true),
+                'is_success': True,
+                })
+        except: # else:
+            fail_count += 1
+            scores.append({
+                'pred_file': pred_file.parent / pred_file.stem,
+                'rms_precision': 0, 'rms_recall': 0, 'rms_f11': 0,
+                'is_success': False,
+                })
 
     df_scores = pd.DataFrame.from_dict(scores)
     overall_scores = {score: round(df_scores[score].mean(), 4) for score in df_scores.columns if score not in ['pred_file']}
+    success_rate = df_scores['is_success'].value_counts()[True] / len(df_scores)
     logger.info(f"overall scores are: \n{overall_scores}",
                 #[f"{score}: {round(df_scores[score].mean(), 4)}" for score in df_scores.columns if score not in ['pred_file']]
                  )
+    #logger.info(f"failing count: {fail_count}")
+    #logger.info(f"success rate: {success_rate}")
     logger.info(f"saving scores to {cfg.scores_csv}")
     setattr(cfg, 'scores_csv', Path(cfg.scores_csv))
     df_scores.to_csv(cfg.scores_csv)
