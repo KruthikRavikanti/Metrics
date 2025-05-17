@@ -1,4 +1,4 @@
-# GIE-metrics
+# Metrics
 
 This repository includes Relative Mapping Similarity implementation and scripts for calculating other metrics, like accuracy for Chart Classification.
 
