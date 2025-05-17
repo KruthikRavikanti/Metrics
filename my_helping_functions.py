@@ -312,14 +312,6 @@ class TorchDatasetWithHFTokenizer(torch.utils.data.Dataset):
 
 
 class BatchedTorchDatasetWithHFTokenizer(torch.utils.data.Dataset):
-    """
-    This class tokenizes the data at the while creating this class and saves the tokenized version for next loads.
-/bin
-This is necessary when we want to use max-tokens instead of batch-size.
-Example:
-    sentences = BatchedTorchDatasetWithHFTokenizer('/Users/mohamedfayed/data/mt/all.en', tokenizer, inference_device='cpu', max_tokens_per_gpu=4096, count_paddings=True, sort_according_to_length=True, save_batches=True)
-    loader = torch.utils.data.DataLoader(sentences, collate_fn=sentences.collate_fn, batch_size=1, shuffle=False, multiprocessing_context=None)
-    """
     def __init__(
             self,
             textfile,
