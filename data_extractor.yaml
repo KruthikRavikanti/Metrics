@@ -1,4 +1,4 @@
-#root_dir: /home/{redacted}/gie/{redacted}/{redacted}-back-end/inputs
+#root_dir: /home/{redacted}/{redacted}/{redacted}/{redacted}-back-end/inputs
 root_dir: /home/{redacted}/{redacted}/{redacted}-back-end/inputs
 input: ${root_dir}/line_graph_og_l2s.png
 output_prefix: ${root_dir}/tables/line_graph_og_l2s #extensions are appended to each generated file accordingly
